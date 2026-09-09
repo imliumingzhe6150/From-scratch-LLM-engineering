@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from cs336_basics.generation import generate_tokens
+from cs336_basics.generation import generate_tokens, generate_tokens_with_cache
 from cs336_basics.model import TransformerLM
 from cs336_basics.tokenizer import Tokenizer
 
@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=default_device())
+    parser.add_argument(
+        "--uncached",
+        action="store_true",
+        help="recompute the visible prefix on every token instead of using KV cache",
+    )
 
     model = parser.add_argument_group("model architecture")
     model.add_argument("--context-length", type=int, default=256)
@@ -79,7 +84,8 @@ def main() -> None:
     # GPT-style tokenizers use the end-of-text token to begin generation when
     # there is no textual prompt. It is context only and is not printed.
     model_prompt_tokens = prompt_tokens or [end_token_id]
-    completion_tokens = generate_tokens(
+    generation_function = generate_tokens if args.uncached else generate_tokens_with_cache
+    completion_tokens = generation_function(
         model,
         model_prompt_tokens,
         max_new_tokens=args.max_new_tokens,

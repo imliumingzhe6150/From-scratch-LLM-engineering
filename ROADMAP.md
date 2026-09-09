@@ -109,6 +109,11 @@ plotting, tests, and documentation are required.
 
 ## Milestone 2: Correct and Measurable KV-Cache Inference
 
+Status: completed on 2026-09-08. The cache contract, model/generation APIs,
+logit and greedy-token equivalence tests, context-boundary policy, controlled
+CPU benchmark, engineering note, public figure, source table, and reproducible
+metadata are complete.
+
 ### Goal
 
 Add a resume-visible inference optimization whose correctness and speedup are
@@ -282,6 +287,5 @@ These tasks are valid future work but do not block the resume-ready release:
 
 ## Immediate Next Task
 
-Begin Milestone 2 by defining the per-layer KV-cache contract: cache shapes,
-prefill versus decode behavior, RoPE position offsets, batch semantics, and the
-context-limit policy. Implement correctness tests before benchmarking speed.
+Begin Milestone 3 by defining the memory schema, provenance fields, lifecycle
+rules, retrieval boundary, and fixed evaluation cases before implementation.

@@ -18,7 +18,9 @@ The project has now adopted the resume-oriented roadmap in `ROADMAP.md`.
 Milestone 1 is complete: the TinyStories case study now includes reproducible
 generation evaluation, honest batch-size reporting, a concise public figure,
 machine-readable source data, and clean repository-wide lint. The next active
-milestone is correct and measurable KV-cache inference.
+milestone is complete as well: KV-cache inference now has explicit APIs,
+correctness tests, a controlled CPU benchmark, source data, and a public figure.
+The next active milestone is an evaluated local personal-memory subsystem.
 
 ## Scope Decision
 
@@ -111,6 +113,26 @@ milestone is correct and measurable KV-cache inference.
 - Three-policy evaluation of the selected TinyStories checkpoint; all greedy,
   conservative, and diverse samples reached EOS within the 256-token limit.
 
+### KV-Cache Inference
+
+- Immutable per-layer key/value cache records with explicit
+  `(..., heads, cached_sequence, head_dimension)` shapes and byte accounting.
+- Cached prompt prefill and multi-token or single-token decode through the
+  existing attention, Transformer block, and language-model hierarchy.
+- RoPE offsets derived from cached sequence length, with rotated keys retained
+  so old positions are not recomputed.
+- Hard model-level context bounds and an exact generation-level sliding-window
+  policy that rebuilds the cache when the oldest token is evicted.
+- Cached/full-prefix logit equivalence and greedy-token equivalence tests,
+  including arbitrary leading batch dimensions, float64, EOS, invalid caches,
+  and the context boundary.
+- Reproducible cached/uncached benchmark with warmup, synchronization, repeated
+  timings, output-equivalence checks, cache memory, raw local measurements,
+  median source data, environment metadata, and checkpoint identity.
+- On CPU, the selected TinyStories checkpoint measured 2.27x, 3.94x, and 6.28x
+  median end-to-end throughput improvements for P16/G32, P64/G64, and
+  P128/G128. The longest case used 3.98 MiB of cache storage.
+
 ## Verification Status
 
 | Area | Result |
@@ -136,19 +158,21 @@ milestone is correct and measurable KV-cache inference.
 | Model and optimizer checkpointing | Passed |
 | End-to-end training loop | Passed, including memmap loading and checkpoint resume |
 | Experiment loss-curve parsing and panel construction | Passed |
-| Complete test suite | 66 passed, 2 macOS-only memory tests skipped |
+| Complete test suite | 76 passed, 2 macOS-only memory tests skipped |
 | Text generation | Passed, including temperature, top-p, EOS, and context-window checks |
 | Structured generation evaluation | Passed, including real-checkpoint CLI smoke test |
+| KV-cache inference | 7 correctness tests passed, including logit/token equivalence and context boundary |
+| KV-cache benchmark | 3 benchmark tests passed; real-checkpoint CPU run completed with 5 repeats per case |
 | Learning-rate experiment figure | Passed static preflight: 14 checks, 0 warnings, 0 failures |
 | Batch-size experiment figures | 4 plotting tests passed; static preflight: 14 checks, 0 warnings, 0 failures |
 | Repository-wide Ruff | Passed |
 
 ## Next Steps
 
-1. Define the per-layer KV-cache interface, shapes, position-offset semantics,
-   and context-limit policy before changing model code.
-2. Implement cached prefill/decode with logit-equivalence and greedy-token
-   equivalence tests, then add a controlled CPU/MPS benchmark.
+1. Define the personal-memory data model, provenance fields, lifecycle rules,
+   retrieval boundary, and evaluation cases before implementation.
+2. Implement local memory creation, retrieval, revision, supersession, and
+   forgetting with fixed tests for stale-fact suppression and provenance.
 
 ## Known Issues and Technical Debt
 
@@ -162,6 +186,8 @@ milestone is correct and measurable KV-cache inference.
   necessarily representative of the full corpus.
 - The original 2026-08-30 daily summary predates the completed OpenWebText run
   and should be treated as historical rather than current project status.
+- The first KV-cache implementation extends tensors with `torch.cat`; a
+  preallocated cache could reduce copy overhead without changing the API.
 
 ## Key Paths
 
@@ -175,6 +201,7 @@ milestone is correct and measurable KV-cache inference.
 | Public figures | `docs/assets/` |
 | Versioned result tables | `results/` |
 | Text generation | `cs336_basics/generation.py` and `scripts/generate.py` |
+| KV-cache design and benchmark | `docs/kv_cache.md`, `docs/decisions/003-kv-cache-contract.md`, and `scripts/benchmark_kv_cache.py` |
 | Generation evaluation | `cs336_basics/generation_evaluation.py` and `scripts/evaluate_generation.py` |
 | Tokenizer implementation | `cs336_basics/tokenizer.py` |
 | Test integration | `tests/adapters.py` |

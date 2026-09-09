@@ -9,9 +9,9 @@ résumé when they are supported by code, tests, or recorded measurements.
 Implemented and trained a small decoder-only Transformer from byte-level
 tokenization through autoregressive generation, with an emphasis on explicit
 tensor operations, controlled experiments, and reproducibility rather than
-assembling high-level model components. The next original contributions are
-correct, benchmarked KV-cache inference and an evaluated personal-memory
-subsystem.
+assembling high-level model components. The first original inference extension
+is a correct, benchmarked KV cache; the next extension is an evaluated
+personal-memory subsystem.
 
 ## Evidence-Backed Contributions
 
@@ -59,7 +59,7 @@ subsystem.
 - Built a reproducible three-panel batch-size report that isolates the valid
   fixed-token B1/B8 comparison, preserves the larger runs as a labeled
   fixed-update study, and exports every plotted observation with run metadata.
-- Passed the complete current suite with 66 tests passing and two macOS-only
+- Passed the complete current suite with 76 tests passing and two macOS-only
   memory-limit tests skipped.
 
 ### TinyStories model result
@@ -71,6 +71,21 @@ subsystem.
 - Implemented and tested greedy, temperature-scaled, and exact top-p generation,
   then recorded a three-policy comparison with explicit seeds, stopping
   reasons, token counts, model configuration, and artifact hashes.
+
+### KV-cache inference
+
+- Added explicit per-layer caches with documented
+  `(..., heads, sequence, head_dimension)` shapes, rotated-key storage, RoPE
+  offsets, byte accounting, multi-token prefill, and incremental decoding.
+- Preserved exact sliding-context semantics by rebuilding the visible window at
+  the context boundary, and tested cached logits against full-prefix logits plus
+  greedy token equivalence across that boundary.
+- Built a benchmark with device synchronization, warmup, repeated timings,
+  actual generated-token counts, output-equivalence checks, raw measurements,
+  medians, cache memory, and checkpoint/environment identity.
+- On CPU with the selected 22.7M-parameter checkpoint, measured 2.27x, 3.94x,
+  and 6.28x median end-to-end throughput for P16/G32, P64/G64, and P128/G128;
+  the longest case used 3.98 MiB of KV-cache storage.
 
 ## Current Evidence-Backed Résumé Bullets
 
@@ -84,9 +99,14 @@ subsystem.
 > checkpoint resume; trained a 22.7M-parameter TinyStories model on 40.96M tokens
 > in 68 minutes on Apple MPS and reached 1.607 validation loss.
 
+> Added correctness-tested KV-cache inference with explicit RoPE offsets and
+> context-boundary semantics; improved median CPU generation throughput by
+> 2.27x to 6.28x across three measured prompt/generation lengths while using at
+> most 3.98 MiB of cache memory.
+
 These bullets may be used now because their numbers are recorded in
-`EXPERIMENTS.md`. Add KV-cache and memory-system bullets only after their
-roadmap exit criteria are satisfied.
+`EXPERIMENTS.md`. Add memory-system bullets only after their roadmap exit
+criteria are satisfied.
 
 ## Interview Topics to Be Able to Explain
 
@@ -110,11 +130,13 @@ roadmap exit criteria are satisfied.
   sublayers, and why the LM head returns logits rather than probabilities.
 - Why `sequence_length` is the current input length while `context_length` is
   the configured upper bound.
+- Why cached keys are stored after RoPE, how the cache position offset is
+  derived, and why exact sliding-window generation rebuilds at the boundary.
+- How KV caching trades linear memory growth for less repeated projection,
+  feed-forward, and attention computation during autoregressive decoding.
 
 ## Planned Differentiators
 
-- Correct KV-cache inference with token-level equivalence tests and a controlled
-  performance benchmark.
 - Retrieval-backed personal memory with explicit memory creation, updating,
   conflict resolution, forgetting, and provenance.
 - A fixed memory benchmark covering retrieval, conflict resolution, stale-fact

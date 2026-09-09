@@ -12,9 +12,10 @@ RMSNorm, RoPE, causal multi-head attention, and SwiGLU blocks.
 
 The selected TinyStories model has 22,696,448 parameters and reached a
 validation loss of 1.607 after training on 40.96 million tokens on Apple MPS.
-The active portfolio roadmap now focuses on rigorous generation evaluation,
-KV-cache inference, and an evaluated local personal-memory subsystem rather
-than completing every remaining assignment experiment.
+The project now includes structured generation evaluation and benchmarked
+KV-cache inference. The active portfolio roadmap next focuses on an evaluated
+local personal-memory subsystem rather than completing every remaining
+assignment experiment.
 
 ## Project Status
 
@@ -30,8 +31,8 @@ than completing every remaining assignment experiment.
 - Structured three-policy generation evaluation: complete and recorded.
 - Batch-size systems/fixed-budget figure: complete with source-data export.
 - Low-resource TinyStories training target: reached with validation loss 1.607.
-- KV-cache inference: next extension.
-- Personal-memory subsystem: planned after cached inference.
+- KV-cache inference: complete, equivalence-tested, and benchmarked.
+- Personal-memory subsystem: next extension.
 
 See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the live project snapshot and
 [EXPERIMENTS.md](./EXPERIMENTS.md) for measured results. The milestone plan,
@@ -52,6 +53,21 @@ report rather than presented here as a causal batch-size comparison.
 [Source data](./results/tinystories_batch_size_source_data.csv) ·
 [Full interpretation](./EXPERIMENTS.md#2026-09-08-batch-size-systems-and-fixed-budget-report)
 
+## KV-Cache Inference Result
+
+![Cached and uncached generation throughput](docs/assets/tinystories_kv_cache_benchmark.png)
+
+On CPU with the selected 22.7M-parameter checkpoint, cached generation reached
+636, 582, and 522 tokens/s for the P16/G32, P64/G64, and P128/G128 cases. This
+was 2.27x, 3.94x, and 6.28x the corresponding uncached throughput. Each value is
+the median of five measured repeats after two warmups; model loading is excluded
+and cached/uncached greedy tokens are checked for exact agreement. These are
+single-machine measurements, not universal speedups.
+
+[Source data](./results/tinystories_kv_cache_benchmark_summary.csv) ·
+[Environment and checkpoint identity](./results/tinystories_kv_cache_benchmark_metadata.json) ·
+[Engineering note](./docs/kv_cache.md)
+
 ## Repository Guide
 
 | Path | Purpose |
@@ -62,6 +78,7 @@ report rather than presented here as a causal batch-size comparison.
 | `cs336_basics/serialization.py` | Training checkpoint save/load utilities |
 | `cs336_basics/training.py` | Validation and end-to-end training loop |
 | `cs336_basics/generation.py` | Temperature-scaled and top-p decoding |
+| `scripts/benchmark_kv_cache.py` | Cached/uncached inference benchmark |
 | `scripts/` | Tokenizer training, evaluation, and dataset encoding |
 | `tests/adapters.py` | Connection between local implementations and assignment tests |
 | `docs/devlog/` | Chronological development notes |
@@ -169,7 +186,22 @@ uv run scripts/generate.py \
 
 Set `--temperature 0` for deterministic greedy decoding. When the prompt grows
 beyond the configured context length, generation retains the most recent
-context window.
+context window. Generation uses the KV cache by default; pass `--uncached` to
+run the full-prefix baseline.
+
+### Benchmark KV-cache inference
+
+The benchmark excludes model loading, performs device synchronization and
+warmup, verifies greedy-token equivalence, saves every timed repeat, and reports
+median prefill, decode, and end-to-end throughput.
+
+```sh
+uv run scripts/benchmark_kv_cache.py \
+  --device cpu \
+  --checkpoint-path checkpoints/tinystories_base_lr_3e-3_5000.pt \
+  --case 16:32 --case 64:64 --case 128:128 \
+  --warmup-repeats 2 --measured-repeats 5
+```
 
 ### Evaluate decoding policies
 

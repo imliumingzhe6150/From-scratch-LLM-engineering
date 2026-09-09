@@ -9,6 +9,31 @@ from cs336_basics.model import TransformerLM
 from cs336_basics.nn_utils import softmax
 
 
+def _validate_generation_request(
+    model: TransformerLM,
+    prompt_tokens: list[int],
+    *,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    end_token_id: int | None,
+) -> None:
+    """Validate arguments shared by cached and uncached generation."""
+
+    if not prompt_tokens:
+        raise ValueError("prompt_tokens must contain at least one token")
+    if max_new_tokens < 0:
+        raise ValueError(f"max_new_tokens must be non-negative, got {max_new_tokens}")
+    if temperature < 0:
+        raise ValueError(f"temperature must be non-negative, got {temperature}")
+    if not 0 < top_p <= 1:
+        raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+    if end_token_id is not None and not 0 <= end_token_id < model.vocab_size:
+        raise ValueError(f"end_token_id must be in [0, {model.vocab_size}), got {end_token_id}")
+    if any(token_id < 0 or token_id >= model.vocab_size for token_id in prompt_tokens):
+        raise ValueError("prompt_tokens contains an ID outside the model vocabulary")
+
+
 def temperature_scaled_probabilities(logits: Tensor, temperature: float) -> Tensor:
     """Convert logits to probabilities after temperature scaling.
 
@@ -122,20 +147,14 @@ def generate_tokens(
     used as the next model input.
     """
 
-    if not prompt_tokens:
-        raise ValueError("prompt_tokens must contain at least one token")
-    if max_new_tokens < 0:
-        raise ValueError(f"max_new_tokens must be non-negative, got {max_new_tokens}")
-    if temperature < 0:
-        raise ValueError(f"temperature must be non-negative, got {temperature}")
-    if not 0 < top_p <= 1:
-        raise ValueError(f"top_p must be in (0, 1], got {top_p}")
-    if end_token_id is not None and not 0 <= end_token_id < model.vocab_size:
-        raise ValueError(
-            f"end_token_id must be in [0, {model.vocab_size}), got {end_token_id}"
-        )
-    if any(token_id < 0 or token_id >= model.vocab_size for token_id in prompt_tokens):
-        raise ValueError("prompt_tokens contains an ID outside the model vocabulary")
+    _validate_generation_request(
+        model,
+        prompt_tokens,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        end_token_id=end_token_id,
+    )
 
     device = next(model.parameters()).device
     all_tokens = list(prompt_tokens)
@@ -164,6 +183,90 @@ def generate_tokens(
 
             if end_token_id is not None and next_token == end_token_id:
                 break
+    finally:
+        model.train(was_training)
+
+    return completion
+
+
+@torch.inference_mode()
+def generate_tokens_with_cache(
+    model: TransformerLM,
+    prompt_tokens: list[int],
+    *,
+    max_new_tokens: int,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
+    end_token_id: int | None = None,
+    generator: torch.Generator | None = None,
+) -> list[int]:
+    """Generate one completion using prompt prefill and cached decoding.
+
+    The initial visible prompt is evaluated once. Later calls process only the
+    sampled token until the context is full. At that boundary the most recent
+    context window is prefetched again, exactly matching :func:`generate_tokens`
+    rather than silently changing its sliding-window semantics.
+    """
+
+    _validate_generation_request(
+        model,
+        prompt_tokens,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        end_token_id=end_token_id,
+    )
+    if max_new_tokens == 0:
+        return []
+
+    device = next(model.parameters()).device
+    all_tokens = list(prompt_tokens)
+    completion: list[int] = []
+    was_training = model.training
+    model.eval()
+
+    try:
+        model_input = torch.tensor(
+            all_tokens[-model.context_length :],
+            dtype=torch.long,
+            device=device,
+        ).unsqueeze(0)
+        logits, cache = model.forward_with_cache(model_input)
+
+        for decode_step in range(max_new_tokens):
+            next_token = int(
+                sample_next_token(
+                    logits[0, -1],
+                    temperature=temperature,
+                    top_p=top_p,
+                    generator=generator,
+                ).item()
+            )
+            all_tokens.append(next_token)
+            completion.append(next_token)
+
+            if end_token_id is not None and next_token == end_token_id:
+                break
+            if decode_step + 1 == max_new_tokens:
+                break
+
+            if cache.sequence_length < model.context_length:
+                model_input = torch.tensor(
+                    [[next_token]],
+                    dtype=torch.long,
+                    device=device,
+                )
+                logits, cache = model.forward_with_cache(model_input, cache=cache)
+            else:
+                # Cached states cannot exactly represent the established
+                # shifted-window computation after the oldest token is evicted.
+                # Rebuild the full visible window and restart RoPE positions at 0.
+                model_input = torch.tensor(
+                    all_tokens[-model.context_length :],
+                    dtype=torch.long,
+                    device=device,
+                ).unsqueeze(0)
+                logits, cache = model.forward_with_cache(model_input)
     finally:
         model.train(was_training)
 

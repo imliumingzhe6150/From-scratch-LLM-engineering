@@ -5,11 +5,74 @@ parameters, tensor shapes, and computations remain explicit.
 """
 
 import math
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
 
 from cs336_basics.nn_utils import softmax
+
+
+@dataclass(frozen=True)
+class LayerKVCache:
+    """Projected keys and values retained by one attention layer.
+
+    Both tensors have shape
+    ``(..., num_heads, cached_sequence, d_head)``. Keys are stored after RoPE
+    has been applied, so only newly projected keys need rotation during decode.
+    """
+
+    key: Tensor
+    value: Tensor
+
+    def __post_init__(self) -> None:
+        if self.key.ndim < 3:
+            raise ValueError("cached key and value must have at least head, sequence, and feature dimensions")
+        if self.key.shape != self.value.shape:
+            raise ValueError(
+                "cached key and value must have identical shapes, got "
+                f"{tuple(self.key.shape)} and {tuple(self.value.shape)}"
+            )
+        if self.key.device != self.value.device:
+            raise ValueError("cached key and value must be on the same device")
+        if self.key.dtype != self.value.dtype:
+            raise ValueError("cached key and value must have the same dtype")
+
+    @property
+    def sequence_length(self) -> int:
+        """Number of token positions stored in this layer."""
+
+        return self.key.shape[-2]
+
+    @property
+    def size_bytes(self) -> int:
+        """Storage occupied by this layer's key and value tensors."""
+
+        return self.key.numel() * self.key.element_size() + self.value.numel() * self.value.element_size()
+
+
+@dataclass(frozen=True)
+class KVCache:
+    """KV-cache state shared across all layers of a Transformer language model."""
+
+    layers: tuple[LayerKVCache, ...]
+    sequence_length: int
+
+    def __post_init__(self) -> None:
+        if self.sequence_length < 0:
+            raise ValueError(f"cache sequence_length must be non-negative, got {self.sequence_length}")
+        for layer_index, layer_cache in enumerate(self.layers):
+            if layer_cache.sequence_length != self.sequence_length:
+                raise ValueError(
+                    f"layer {layer_index} caches {layer_cache.sequence_length} "
+                    f"positions, expected {self.sequence_length}"
+                )
+
+    @property
+    def size_bytes(self) -> int:
+        """Storage occupied by every cached key and value tensor."""
+
+        return sum(layer.size_bytes for layer in self.layers)
 
 
 class Linear(nn.Module):
@@ -393,42 +456,73 @@ class CausalMultiHeadSelfAttention(nn.Module):
         split = x.reshape(*x.shape[:-2], sequence_length, self.num_heads, self.d_head)
         return split.transpose(-3, -2)
 
-    def forward(
+    def _validate_cache(self, cache: LayerKVCache, key: Tensor) -> None:
+        """Check that a layer cache can be extended by ``key``."""
+
+        expected_batch_shape = key.shape[:-3]
+        if cache.key.shape[:-3] != expected_batch_shape:
+            raise ValueError(
+                "cache batch shape must match the input batch shape, got "
+                f"{tuple(cache.key.shape[:-3])} and {tuple(expected_batch_shape)}"
+            )
+        if cache.key.shape[-3] != self.num_heads:
+            raise ValueError(f"cache has {cache.key.shape[-3]} heads, expected {self.num_heads}")
+        if cache.key.shape[-1] != self.d_head:
+            raise ValueError(f"cache head dimension is {cache.key.shape[-1]}, expected {self.d_head}")
+        if cache.key.device != key.device:
+            raise ValueError(f"cache is on {cache.key.device}, but input is on {key.device}")
+        if cache.key.dtype != key.dtype:
+            raise ValueError(f"cache dtype is {cache.key.dtype}, but input dtype is {key.dtype}")
+
+    def _forward_with_optional_cache(
         self,
         x: Tensor,
-        token_positions: Tensor | None = None,
-    ) -> Tensor:
-        """Return causal self-attention output with the same shape as ``x``."""
+        token_positions: Tensor | None,
+        cache: LayerKVCache | None,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Run attention and return its output together with the extended cache."""
 
         if x.shape[-1] != self.d_model:
-            raise ValueError(
-                f"expected input's final dimension to be {self.d_model}, "
-                f"got {x.shape[-1]}"
-            )
+            raise ValueError(f"expected input's final dimension to be {self.d_model}, got {x.shape[-1]}")
 
         sequence_length = x.shape[-2]
+        if sequence_length == 0:
+            raise ValueError("attention input must contain at least one token")
 
         # Project all heads together, then expose a separate head dimension.
         query = self._split_heads(self.q_proj(x))
-        key = self._split_heads(self.k_proj(x))
-        value = self._split_heads(self.v_proj(x))
+        new_key = self._split_heads(self.k_proj(x))
+        new_value = self._split_heads(self.v_proj(x))
+
+        past_length = 0 if cache is None else cache.sequence_length
+        if cache is not None:
+            self._validate_cache(cache, new_key)
 
         if self.rope is not None:
             if token_positions is None:
-                token_positions = torch.arange(sequence_length, device=x.device)
+                token_positions = torch.arange(
+                    past_length,
+                    past_length + sequence_length,
+                    device=x.device,
+                )
             query = self.rope(query, token_positions)
-            key = self.rope(key, token_positions)
+            new_key = self.rope(new_key, token_positions)
 
-        # Row i can attend only to columns j <= i. Its two dimensions broadcast
-        # automatically across every batch dimension and attention head.
-        causal_mask = torch.tril(
-            torch.ones(
-                sequence_length,
-                sequence_length,
-                dtype=torch.bool,
-                device=x.device,
-            )
+        if cache is None:
+            key = new_key
+            value = new_value
+        else:
+            # Sequence is the penultimate dimension in the split-head layout.
+            key = torch.cat((cache.key, new_key), dim=-2)
+            value = torch.cat((cache.value, new_value), dim=-2)
+
+        total_key_length = past_length + sequence_length
+        query_indices = past_length + torch.arange(
+            sequence_length,
+            device=x.device,
         )
+        key_indices = torch.arange(total_key_length, device=x.device)
+        causal_mask = key_indices.unsqueeze(0) <= query_indices.unsqueeze(1)
         attended = scaled_dot_product_attention(
             query,
             key,
@@ -440,7 +534,36 @@ class CausalMultiHeadSelfAttention(nn.Module):
         # (..., heads, sequence, d_head) -> (..., sequence, d_model).
         merged = attended.transpose(-3, -2).contiguous()
         merged = merged.reshape(*x.shape[:-2], sequence_length, self.d_model)
-        return self.output_proj(merged)
+        return self.output_proj(merged), LayerKVCache(key=key, value=value)
+
+    def forward(
+        self,
+        x: Tensor,
+        token_positions: Tensor | None = None,
+    ) -> Tensor:
+        """Return causal self-attention output with the same shape as ``x``."""
+
+        output, _ = self._forward_with_optional_cache(
+            x,
+            token_positions=token_positions,
+            cache=None,
+        )
+        return output
+
+    def forward_with_cache(
+        self,
+        x: Tensor,
+        *,
+        cache: LayerKVCache | None = None,
+        token_positions: Tensor | None = None,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Attend over cached history and return output plus the extended cache."""
+
+        return self._forward_with_optional_cache(
+            x,
+            token_positions=token_positions,
+            cache=cache,
+        )
 
 
 def silu(x: Tensor) -> Tensor:
@@ -563,6 +686,24 @@ class TransformerBlock(nn.Module):
         x = x + self.ffn(self.ln2(x))
         return x
 
+    def forward_with_cache(
+        self,
+        x: Tensor,
+        *,
+        cache: LayerKVCache | None = None,
+        token_positions: Tensor | None = None,
+    ) -> tuple[Tensor, LayerKVCache]:
+        """Process new tokens while extending this block's attention cache."""
+
+        attention_output, updated_cache = self.attn.forward_with_cache(
+            self.ln1(x),
+            cache=cache,
+            token_positions=token_positions,
+        )
+        x = x + attention_output
+        x = x + self.ffn(self.ln2(x))
+        return x, updated_cache
+
 
 class TransformerLM(nn.Module):
     """Decoder-only Transformer that maps token IDs to vocabulary logits."""
@@ -643,3 +784,58 @@ class TransformerLM(nn.Module):
 
         normalized = self.ln_final(hidden_states)
         return self.lm_head(normalized)
+
+    def forward_with_cache(
+        self,
+        token_ids: Tensor,
+        cache: KVCache | None = None,
+    ) -> tuple[Tensor, KVCache]:
+        """Return logits for new tokens and an extended per-layer KV cache.
+
+        ``token_ids`` may contain a complete prompt (prefill) or one or more
+        later tokens (decode). If ``cache`` already contains ``P`` positions,
+        the new tokens receive RoPE positions beginning at ``P``.
+        """
+
+        sequence_length = token_ids.shape[-1]
+        if sequence_length == 0:
+            raise ValueError("token_ids must contain at least one token")
+
+        if cache is None:
+            past_length = 0
+            layer_caches: tuple[LayerKVCache | None, ...] = (None,) * self.num_layers
+        else:
+            if len(cache.layers) != self.num_layers:
+                raise ValueError(f"cache contains {len(cache.layers)} layers, but model has {self.num_layers}")
+            past_length = cache.sequence_length
+            layer_caches = cache.layers
+
+        total_length = past_length + sequence_length
+        if total_length > self.context_length:
+            raise ValueError(
+                f"cached sequence length {past_length} plus input length "
+                f"{sequence_length} exceeds context length {self.context_length}"
+            )
+
+        token_positions = torch.arange(
+            past_length,
+            total_length,
+            device=token_ids.device,
+        )
+        hidden_states = self.token_embeddings(token_ids)
+        updated_layer_caches: list[LayerKVCache] = []
+        for layer, layer_cache in zip(self.layers, layer_caches, strict=True):
+            hidden_states, updated_layer_cache = layer.forward_with_cache(
+                hidden_states,
+                cache=layer_cache,
+                token_positions=token_positions,
+            )
+            updated_layer_caches.append(updated_layer_cache)
+
+        normalized = self.ln_final(hidden_states)
+        logits = self.lm_head(normalized)
+        updated_cache = KVCache(
+            layers=tuple(updated_layer_caches),
+            sequence_length=total_length,
+        )
+        return logits, updated_cache

@@ -258,6 +258,48 @@ happy.
   `docs/assets/tinystories_batch_size_overview.{svg,png}`, and
   `results/tinystories_batch_size_source_data.csv`.
 
+### 2026-09-08: KV-cache correctness and CPU benchmark
+
+- Question: Does caching per-layer keys and values preserve model outputs, and
+  how does measured autoregressive generation throughput change with prompt and
+  generation length?
+- Model: The selected 22,696,448-parameter TinyStories checkpoint with context
+  length 256. The checkpoint SHA-256 is recorded in the benchmark metadata.
+- Runtime: CPU on Apple Silicon, PyTorch 2.11.0, Python 3.13.15. Each mode and
+  case used two untimed warmups followed by five measured repeats.
+- Method: Model/checkpoint loading was excluded. Each timed run included prompt
+  prefill and a fixed number of greedy output tokens. The benchmark synchronized
+  devices around timed phases, generated from the same seeded synthetic prompt
+  tokens, and required cached and uncached outputs to match token for token.
+
+| Prompt / generated tokens | Uncached tokens/s | Cached tokens/s | Speedup | Peak cache |
+| --- | ---: | ---: | ---: | ---: |
+| 16 / 32 | 280.70 | 636.16 | 2.27x | 0.73 MiB |
+| 64 / 64 | 147.53 | 581.74 | 3.94x | 1.98 MiB |
+| 128 / 128 | 83.13 | 521.94 | 6.28x | 3.98 MiB |
+
+- Correctness: Cached logits matched full-prefix logits for multi-token chunks,
+  incremental single-token decoding, arbitrary leading batch dimensions, and
+  float64 tests. Greedy cached and uncached generation also matched after the
+  context window shifted. Cache shape, EOS, mode restoration, and invalid-cache
+  failures have dedicated tests.
+- Interpretation: Reusing the earlier layers' keys and values increasingly
+  helps as the visible prefix grows. The cached path still attends over every
+  stored position and uses `torch.cat` to extend tensors, so its throughput also
+  declines with sequence length.
+- Cache accounting: At batch 1 in float32, cache storage is
+  `2 * layers * cached_sequence * d_model * 4 bytes`. The P128/G128 run reaches
+  255 cached positions before predicting its final measured token, for
+  4,177,920 bytes (3.98 MiB).
+- Limitations: These are medians from one CPU and one seeded prompt per length,
+  without uncertainty intervals. They establish a measured result for this
+  implementation and environment, not a hardware-independent speedup.
+- Artifacts: `scripts/benchmark_kv_cache.py`,
+  `output/experiments/tinystories_kv_cache_benchmark*`,
+  `results/tinystories_kv_cache_benchmark_summary.csv`,
+  `results/tinystories_kv_cache_benchmark_metadata.json`, and
+  `docs/assets/tinystories_kv_cache_benchmark.{svg,png}`.
+
 ### 2026-09-07: 200-step TinyStories baseline
 
 - Question: After 200 training steps, what level of language structure can the
