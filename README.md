@@ -1,9 +1,7 @@
 # From-Scratch Language Model
 
 This project builds a small decoder-only language model from byte-level
-tokenization through Transformer training and inference. The primary goal is to
-understand and explain the underlying computations, then reuse that foundation
-in a personal-memory agent.
+tokenization through Transformer training and inference.
 
 The current implementation includes a byte-level BPE tokenizer trained on
 TinyStories and OpenWebText, dataset encoding, and a complete decoder-only
@@ -13,31 +11,7 @@ RMSNorm, RoPE, causal multi-head attention, and SwiGLU blocks.
 The selected TinyStories model has 22,696,448 parameters and reached a
 validation loss of 1.607 after training on 40.96 million tokens on Apple MPS.
 The project now includes structured generation evaluation and benchmarked
-KV-cache inference. The active portfolio roadmap next focuses on an evaluated
-local personal-memory subsystem rather than completing every remaining
-assignment experiment.
-
-## Project Status
-
-- Tokenizer milestone: complete for model development.
-- Transformer architecture: complete and verified by the model test suite.
-- Numerically stable cross-entropy: complete and verified.
-- AdamW: complete and verified.
-- Gradient clipping: complete and verified.
-- Data sampling: complete and verified.
-- Checkpointing: complete and verified.
-- Configurable training loop: complete and verified.
-- Temperature-scaled and top-p text generation: complete and verified.
-- Structured three-policy generation evaluation: complete and recorded.
-- Batch-size systems/fixed-budget figure: complete with source-data export.
-- Low-resource TinyStories training target: reached with validation loss 1.607.
-- KV-cache inference: complete, equivalence-tested, and benchmarked.
-- Personal-memory subsystem: next extension.
-
-See [PROJECT_STATUS.md](./PROJECT_STATUS.md) for the live project snapshot and
-[EXPERIMENTS.md](./EXPERIMENTS.md) for measured results. The milestone plan,
-scope boundary, and resume-ready exit criteria are in
-[ROADMAP.md](./ROADMAP.md).
+KV-cache inference.
 
 ## TinyStories Batch-Size Result
 
@@ -70,23 +44,23 @@ single-machine measurements, not universal speedups.
 
 ## Repository Guide
 
-| Path | Purpose |
-| --- | --- |
-| `cs336_basics/tokenizer.py` | BPE training and tokenizer implementation |
-| `cs336_basics/model.py` | Transformer building blocks |
-| `cs336_basics/data.py` | Language-model batch sampling |
-| `cs336_basics/serialization.py` | Training checkpoint save/load utilities |
-| `cs336_basics/training.py` | Validation and end-to-end training loop |
-| `cs336_basics/generation.py` | Temperature-scaled and top-p decoding |
-| `scripts/benchmark_kv_cache.py` | Cached/uncached inference benchmark |
-| `scripts/` | Tokenizer training, evaluation, and dataset encoding |
-| `tests/adapters.py` | Connection between local implementations and assignment tests |
-| `docs/devlog/` | Chronological development notes |
-| `docs/decisions/` | Architecture decision records |
-| `docs/assets/` | Version-controlled figures used by the public README |
-| `results/` | Small, version-controlled source-data tables for public figures |
-| `PORTFOLIO.md` | Evidence and interview material |
-| `ROADMAP.md` | Resume-oriented milestones and exit criteria |
+| Path                              | Purpose                                                         |
+| --------------------------------- | --------------------------------------------------------------- |
+| `cs336_basics/tokenizer.py`     | BPE training and tokenizer implementation                       |
+| `cs336_basics/model.py`         | Transformer building blocks                                     |
+| `cs336_basics/data.py`          | Language-model batch sampling                                   |
+| `cs336_basics/serialization.py` | Training checkpoint save/load utilities                         |
+| `cs336_basics/training.py`      | Validation and end-to-end training loop                         |
+| `cs336_basics/generation.py`    | Temperature-scaled and top-p decoding                           |
+| `scripts/benchmark_kv_cache.py` | Cached/uncached inference benchmark                             |
+| `scripts/`                      | Tokenizer training, evaluation, and dataset encoding            |
+| `tests/adapters.py`             | Connection between local implementations and assignment tests   |
+| `docs/devlog/`                  | Chronological development notes                                 |
+| `docs/decisions/`               | Architecture decision records                                   |
+| `docs/assets/`                  | Version-controlled figures used by the public README            |
+| `results/`                      | Small, version-controlled source-data tables for public figures |
+| `PORTFOLIO.md`                  | Evidence and interview material                                 |
+| `ROADMAP.md`                    | Resume-oriented milestones and exit criteria                    |
 
 ## Setup
 
@@ -120,7 +94,7 @@ memory-limit tests that are skipped on this platform.
 
 Download the TinyStories data and a subsample of OpenWebText
 
-``` sh
+```sh
 mkdir -p data
 cd data
 
