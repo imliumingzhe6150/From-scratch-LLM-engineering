@@ -173,3 +173,6 @@ wandb/
 
 # macOS metadata
 .DS_Store
+
+# Local interview notes
+/interview_review.md
